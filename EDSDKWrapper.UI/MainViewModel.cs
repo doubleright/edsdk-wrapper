@@ -101,8 +101,10 @@ namespace EDSDKWrapper.UI
                             }));
 
                             exceptionCount = 0;
+
+                            Thread.Sleep(50);
                         }
-                        catch
+                        catch(Exception ex)
                         {
                             Thread.Sleep(100);
                             if (++exceptionCount > 10)
@@ -140,6 +142,8 @@ namespace EDSDKWrapper.UI
         private void StopCapturingCommand_Executed()
         {
             this.Camera.StopLiveView();
+
+            this.Camera.Dispose();
             // this.LiveViewCapturingTask.Wait();
         }
 
