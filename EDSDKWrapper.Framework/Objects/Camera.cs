@@ -7,6 +7,11 @@ using System.Runtime.InteropServices;
 using System.IO;
 using EDSDKLib;
 using static EDSDKLib.EDSDK;
+using static EDSDKWrapper.Framework.Objects.FileCounter;
+using System.Runtime.InteropServices.ComTypes;
+using System.Linq;
+using System.Reflection;
+using EDSDKWrapper.Framework.Exceptions;
 
 namespace EDSDKWrapper.Framework.Objects
 {
@@ -16,6 +21,8 @@ namespace EDSDKWrapper.Framework.Objects
     /// <remarks></remarks>
     public class Camera : Item
     {
+        private IntPtr[] _volumes = new IntPtr[2];
+
         #region Constants
 
         // public const UInt32 AC_POWER_SOURCE = 0xffffffff;
@@ -637,6 +644,8 @@ namespace EDSDKWrapper.Framework.Objects
 
             // Opens a session
             OpenSession();
+
+            InitVolumes();
         }
 
         #endregion
@@ -663,6 +672,26 @@ namespace EDSDKWrapper.Framework.Objects
             ReturnValueManager.HandleFunctionReturnValue(returnValue);
         }
 
+        protected void InitVolumes() 
+        {
+            var volume_count = 0;
+
+            UInt32 returnValue = EDSDKLib.EDSDK.EdsGetChildCount(Handle, out volume_count);
+
+            ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+            if (volume_count > 0)
+            {
+                returnValue = EDSDKLib.EDSDK.EdsGetChildAtIndex(Handle, 0, out _volumes[0]);
+                ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+                if (volume_count > 1)
+                {
+                    returnValue = EDSDKLib.EDSDK.EdsGetChildAtIndex(Handle, 1, out _volumes[1]);
+                    ReturnValueManager.HandleFunctionReturnValue(returnValue);
+                }
+            }
+        }
         #endregion
 
         #region Overridden Methods
@@ -776,11 +805,79 @@ namespace EDSDKWrapper.Framework.Objects
         {
             UInt32 returnValue = EDSDK.EdsSendCommand(this.Handle, (uint)CameraCommand.PressShutterButton, state);
             ReturnValueManager.HandleFunctionReturnValue(returnValue);
-
         }
 
-        #endregion
+        public void DeleteAllPhoto(int volume=0) 
+        {
+            IntPtr directoryItem = IntPtr.Zero;
+            uint err = EDSDKLib.EDSDK.EDS_ERR_OK;
+            int fileCount = 0;
+            List<IntPtr> imageItems = new List<IntPtr>();
+            try
+            {
+                FileCounter fileCounter = new FileCounter(ref _volumes[volume]);
 
+                // Prepare Download
+                int directoryCount;
+
+                err = fileCounter.CountDirectory(Handle, ref directoryItem, out directoryCount);
+                ReturnValueManager.HandleFunctionReturnValue(err);
+
+                var fileNumber = new FileCounter.FileNumber(directoryCount);
+                fileNumber.DcimItem = directoryItem;
+
+                err = fileCounter.CountImages(Handle, ref directoryItem, ref directoryCount, ref fileCount, ref fileNumber, ref imageItems);
+                ReturnValueManager.HandleFunctionReturnValue(err);
+
+                foreach (var item in imageItems)
+                {
+                    err = EDSDK.EdsDeleteDirectoryItem(item);
+                    ReturnValueManager.HandleFunctionReturnValue(err);
+
+                    err = EDSDK.EdsRelease(item);
+                }
+            }
+            finally
+            {
+                EDSDK.EdsRelease(directoryItem);
+            }
+        }
+
+        public void GetLastPhoto(ref string fullPath, int volume = 0)
+        {
+            IntPtr directoryItem = IntPtr.Zero;
+            uint err = EDSDKLib.EDSDK.EDS_ERR_OK;
+            int fileCount = 0;
+            List<IntPtr> imageItems = new List<IntPtr>();
+            try
+            {
+                FileCounter fileCounter = new FileCounter(ref _volumes[volume]);
+
+                // Prepare Download
+                int directoryCount;
+
+                err = fileCounter.CountDirectory(Handle, ref directoryItem, out directoryCount);
+                ReturnValueManager.HandleFunctionReturnValue(err);
+
+                var fileNumber = new FileCounter.FileNumber(directoryCount);
+                fileNumber.DcimItem = directoryItem;
+
+                err = fileCounter.CountImages(Handle, ref directoryItem, ref directoryCount, ref fileCount, ref fileNumber, ref imageItems);
+                ReturnValueManager.HandleFunctionReturnValue(err);
+
+                if (imageItems?.Count>0)
+                {
+                    var fileitem = imageItems.LastOrDefault();
+
+                    fullPath = DownloadImage(fileitem);
+                }
+            }
+            finally
+            {
+                EDSDK.EdsRelease(directoryItem);
+            }
+        }
+        #endregion
 
         private EDSDK.EdsObjectEventHandler m_edsObjectEventHandler;
         private EDSDK.EdsPropertyEventHandler m_edsPropertyEventHandler;
@@ -814,9 +911,10 @@ namespace EDSDKWrapper.Framework.Objects
             Console.WriteLine(String.Format("ObjectEventHandler: event {0}, ref {1}", inEvent.ToString("X"), inRef.ToString()));
             switch (inEvent)
             {
-                case (uint)ObjectEvent.DirItemCreated:
+                case (uint)ObjectEvent.DirItemRequestTransfer:
+                //case (uint)ObjectEvent.DirItemCreated:
                     DownloadImage(inRef);
-                    break;
+                    break;              
             }
             return 0x0;
         }
@@ -825,18 +923,17 @@ namespace EDSDKWrapper.Framework.Objects
         /// Download image to disk.
         /// </summary>
         /// <param name="dirRef">A reference to objects created by the event</param>
-        private void DownloadImage(IntPtr dirRef)
+        private string DownloadImage(IntPtr dirRef)
         {
             IntPtr stream = IntPtr.Zero;
             IntPtr data = IntPtr.Zero;
             EdsDirectoryItemInfo dirItemInfo;
-
+            string fullpath = String.Empty;
             try
             {
                 UInt32 returnValue = EDSDK.EdsGetDirectoryItemInfo(dirRef, out dirItemInfo);
                 ReturnValueManager.HandleFunctionReturnValue(returnValue);
-
-                string fullpath = String.Empty;
+           
                 if (!String.IsNullOrEmpty(ImageSaveDirectory))
                 {
                     fullpath = System.IO.Path.Combine(ImageSaveDirectory, dirItemInfo.szFileName);
@@ -845,13 +942,13 @@ namespace EDSDKWrapper.Framework.Objects
                 {
                     fullpath = System.IO.Path.Combine(Environment.CurrentDirectory, dirItemInfo.szFileName);
                 }
-                returnValue = EDSDK.EdsCreateFileStream(fullpath, EdsFileCreateDisposition.CreateAlways, EdsAccess.ReadWrite, out stream);
+                returnValue = EDSDK.EdsCreateFileStream(fullpath, EdsFileCreateDisposition.CreateAlways, EdsAccess.Write, out stream);
                 ReturnValueManager.HandleFunctionReturnValue(returnValue);
 
                 returnValue = EDSDK.EdsDownload(dirRef, dirItemInfo.Size, stream);
                 ReturnValueManager.HandleFunctionReturnValue(returnValue);
 
-                if(returnValue == (uint )ReturnValue.Ok)
+                if (returnValue == (uint)ReturnValue.Ok)
                 {
                     returnValue = EDSDK.EdsDownloadComplete(dirRef);
                 }
@@ -860,22 +957,237 @@ namespace EDSDKWrapper.Framework.Objects
                     returnValue = EDSDK.EdsDownloadCancel(dirRef);
                 }
 
-                returnValue = EDSDK.EdsGetPointer(stream, out data);
-                ReturnValueManager.HandleFunctionReturnValue(returnValue);
+                //returnValue = EDSDK.EdsGetPointer(stream, out data);
+                //ReturnValueManager.HandleFunctionReturnValue(returnValue);
+            }
+            catch (EDSDKException edsex)
+            {
+                Console.Out.WriteLine($"EDSDKException:{edsex.ReturnValue}\r\n{edsex.StackTrace}");
+                fullpath = String.Empty;
             }
             catch (Exception ex)
             {
                 Console.Out.WriteLine(ex.Message);
+                fullpath = String.Empty;
             }
             finally
             {
                 EDSDK.EdsRelease(stream);
                 EDSDK.EdsRelease(data);
             }
+
+            return fullpath;
         }
 
+        private MemoryStream GetImageMemoryStream(IntPtr dirRef)
+        {
+            IntPtr streamPointer = IntPtr.Zero;
+            EdsDirectoryItemInfo dirItemInfo;
+        
+            try
+            {
+                UInt32 returnValue = EDSDK.EdsGetDirectoryItemInfo(dirRef, out dirItemInfo);
+                ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+                returnValue = EDSDK.EdsCreateMemoryStream(0, out streamPointer);
+                ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+                returnValue = EDSDK.EdsDownload(dirRef, dirItemInfo.Size, streamPointer);
+                ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+                if (returnValue == (uint)ReturnValue.Ok)
+                {
+                    returnValue = EDSDK.EdsDownloadComplete(dirRef);
+                    ReturnValueManager.HandleFunctionReturnValue(returnValue);
+                }
+                else
+                {
+                    returnValue = EDSDK.EdsDownloadCancel(dirRef);
+                    ReturnValueManager.HandleFunctionReturnValue(returnValue);
+                }
+
+                IntPtr imageBlob;
+                returnValue = EDSDK.EdsGetPointer(streamPointer, out imageBlob);
+                ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+                try
+                {
+                    ulong imageBlobLength;
+                    returnValue = EDSDK.EdsGetLength(streamPointer, out imageBlobLength);
+                    ReturnValueManager.HandleFunctionReturnValue(returnValue);
+
+                    byte[] buffer = new byte[imageBlobLength];
+                    Marshal.Copy(imageBlob, buffer, 0, (int)imageBlobLength);
+
+                    var stream = new MemoryStream(buffer);
+                    return stream;
+                }
+                finally
+                {
+                    EDSDK.EdsRelease(imageBlob);
+                }
+            }
+            finally
+            {
+                EDSDK.EdsRelease(streamPointer);
+            }
+        }
         #endregion
 
         #endregion
+    }
+
+
+    internal class FileCounter
+    {
+        public FileCounter(ref IntPtr volume)
+        {
+            _volume = volume;
+        }
+
+        public struct FileNumber
+        {
+            public IntPtr DcimItem;
+            public int dirnum;
+            public int[] filenum;
+
+            public FileNumber(int p1)
+            {
+                DcimItem = IntPtr.Zero;
+                dirnum = p1;
+                filenum = new int[dirnum];
+            }
+        }
+
+        private IntPtr _volume;
+
+        public uint CountDirectory(IntPtr camera, ref IntPtr directoryItem, out int directory_count)
+        {
+            uint err = EDSDKLib.EDSDK.EDS_ERR_OK;
+            int item_count = 0;
+            directory_count = 0;
+
+            // Get DCIM folder
+            IntPtr dirItem;
+            EDSDKLib.EDSDK.EdsDirectoryItemInfo dirItemInfo;
+            dirItemInfo.szFileName = "";
+            dirItemInfo.Size = 0;
+
+            err = EDSDKLib.EDSDK.EdsGetChildCount(_volume, out item_count);
+            if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+            {
+                return err;
+            }
+            for (int i = 0; i < item_count; ++i)
+            {
+                // Get the ith item under the specifed volume
+                err = EDSDKLib.EDSDK.EdsGetChildAtIndex(_volume, i, out dirItem);
+                if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+                {
+                    continue;
+                }
+
+                // Get retrieved item information
+                err = EDSDKLib.EDSDK.EdsGetDirectoryItemInfo(dirItem, out dirItemInfo);
+                if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+                {
+                    return err;
+                }
+
+                // Indicates whether or not the retrieved item is a DCIM folder.
+                if (dirItemInfo.szFileName == "DCIM" && dirItemInfo.isFolder == 1)
+                {
+                    directoryItem = dirItem;
+                    break;
+                }
+
+                // Release retrieved item
+                if (dirItem != IntPtr.Zero)
+                {
+                    EDSDKLib.EDSDK.EdsRelease(dirItem);
+                }
+            }
+
+            // Get number of directory in DCIM.
+            return err = EDSDKLib.EDSDK.EdsGetChildCount(directoryItem, out directory_count);
+
+        }
+
+        public uint CountImages(IntPtr camera, ref IntPtr directoryItem, ref int directory_count, ref int fileCount, ref FileNumber fileNumber, ref List<IntPtr> imageItems)
+        {
+            uint err = EDSDKLib.EDSDK.EDS_ERR_OK;
+
+            // Get the number of camera volumes
+            fileCount = 0;
+
+            // Get retrieved item information
+
+            for (int i = 0; i < directory_count; ++i)
+            {
+                int count = 0;
+                err = CountImagesByDirectory(ref directoryItem, i, ref count, ref imageItems);
+                if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+                {
+                    return err;
+                }
+                fileCount += count;
+                fileNumber.filenum[i] = count;
+            }
+            return EDSDKLib.EDSDK.EDS_ERR_OK;
+        }
+
+        private uint CountImagesByDirectory(ref IntPtr directoryItem, int directoryNo, ref int image_count, ref List<IntPtr> imageItems)
+        {
+            int item_count = 0;
+
+            IntPtr directoryfiles;
+            IntPtr fileitem;
+            EDSDKLib.EDSDK.EdsDirectoryItemInfo dirItemInfo;
+
+            uint err = EDSDKLib.EDSDK.EdsGetChildAtIndex(directoryItem, directoryNo, out directoryfiles);
+            if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+            {
+                return err;
+            }
+
+            // Get retrieved item information
+            // Get item name
+            err = EDSDKLib.EDSDK.EdsGetDirectoryItemInfo(directoryfiles, out dirItemInfo);
+            if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+            {
+                return err;
+            }
+
+            int index = 0, filecount = 0;
+            err = EDSDKLib.EDSDK.EdsGetChildCount(directoryfiles, out item_count);
+            if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+            {
+                return err;
+            }
+            for (index = 0; index < item_count; ++index)
+            {
+                err = EDSDKLib.EDSDK.EdsGetChildAtIndex(directoryfiles, index, out fileitem);
+                if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+                {
+                    return err;
+                }
+
+                // Get retrieved item information
+                err = EDSDKLib.EDSDK.EdsGetDirectoryItemInfo(fileitem, out dirItemInfo);
+                if (err != EDSDKLib.EDSDK.EDS_ERR_OK)
+                {
+                    return err;
+                }
+                if (dirItemInfo.isFolder == 0)
+                {
+                    imageItems.Add(fileitem);
+                    filecount += 1;
+                }
+
+            }
+            image_count = filecount;
+
+            return EDSDKLib.EDSDK.EDS_ERR_OK;
+        }
     }
 }

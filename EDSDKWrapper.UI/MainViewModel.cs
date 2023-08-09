@@ -11,6 +11,7 @@ using System.Threading;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using EDSDKWrapper.Framework.Objects;
+using System.IO;
 
 namespace EDSDKWrapper.UI
 {
@@ -149,6 +150,29 @@ namespace EDSDKWrapper.UI
 
         #endregion
 
+        #region TakephotoCommand
+
+        public ICommand TakephotoCommand { get { return new RelayCommand(TakephotoCommand_Executed, TakephotoCommand_CanExecute); } }
+
+        private bool TakephotoCommand_CanExecute()
+        {
+            return true;
+        }
+
+        private void TakephotoCommand_Executed()
+        {
+            Camera.SaveTo = Framework.Enums.SaveTo.Host;
+            Camera.ImageSaveDirectory = Path.Combine(Environment.CurrentDirectory, "Images");
+
+            if (!Directory.Exists(Camera.ImageSaveDirectory))
+            {
+                Directory.CreateDirectory(Camera.ImageSaveDirectory);
+            }
+
+            this.Camera.TakePhoto();
+        }
+
+        #endregion
         #endregion
 
         #region IDisposable Members

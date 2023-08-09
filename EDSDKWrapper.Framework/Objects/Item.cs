@@ -100,7 +100,7 @@ namespace EDSDKWrapper.Framework.Objects
         /// </summary>
         /// <value>The item handle.</value>
         /// <remarks></remarks>
-        protected IntPtr Handle { get; set; }
+        public IntPtr Handle { get;protected set; }
 
 
         /// <summary>

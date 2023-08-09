@@ -18,6 +18,7 @@
         <StackPanel VerticalAlignment="Center" Orientation="Vertical">
             <Button Command="{Binding StartCapturingCommand}" Content="Start Capturing" />
             <Button Command="{Binding StopCapturingCommand}" Content="Stop Capturing" />
+            <Button Command="{Binding TakephotoCommand}" Content="Take Photo" />
         </StackPanel>
         <Grid VerticalAlignment="Center">
             <Grid.ColumnDefinitions>
