@@ -7,10 +7,7 @@ using System.Runtime.InteropServices;
 using System.IO;
 using EDSDKLib;
 using static EDSDKLib.EDSDK;
-using static EDSDKWrapper.Framework.Objects.FileCounter;
-using System.Runtime.InteropServices.ComTypes;
 using System.Linq;
-using System.Reflection;
 using EDSDKWrapper.Framework.Exceptions;
 
 namespace EDSDKWrapper.Framework.Objects
@@ -21,6 +18,8 @@ namespace EDSDKWrapper.Framework.Objects
     /// <remarks></remarks>
     public class Camera : Item
     {
+        private GCHandle _thisHandle;
+
         private IntPtr[] _volumes = new IntPtr[2];
 
         #region Constants
@@ -624,6 +623,8 @@ namespace EDSDKWrapper.Framework.Objects
 
         #endregion
 
+        public Func<uint, IntPtr, IntPtr, uint> CustomObjectEventHandler { get; set; }
+
         #endregion
 
         #region Methods
@@ -639,8 +640,7 @@ namespace EDSDKWrapper.Framework.Objects
         public Camera(IntPtr handle)
             : base(handle)
         {
-            // Register Event Handlers
-            RegisterEventHandlers();
+            //RegisterEventHandlers();
 
             // Opens a session
             OpenSession();
@@ -702,6 +702,9 @@ namespace EDSDKWrapper.Framework.Objects
         /// <remarks></remarks>
         public override void Dispose()
         {
+            if (_thisHandle.IsAllocated)
+                _thisHandle.Free();
+
             // Close the session
             CloseSession();
 
@@ -885,18 +888,23 @@ namespace EDSDKWrapper.Framework.Objects
 
         #region Event Handling
 
-        private void RegisterEventHandlers()
+        public void RegisterEventHandlers(object sender)
         {
             //  Register OBJECT events
             m_edsObjectEventHandler = new EDSDK.EdsObjectEventHandler(objectEventHandler);
+
+            _thisHandle = GCHandle.Alloc(sender);
+            var ptr = GCHandle.ToIntPtr(_thisHandle);
+
+
             uint result = EDSDK.EdsSetObjectEventHandler(
                     this.Handle, 
                     (uint)ObjectEvent.All,
                     m_edsObjectEventHandler,
-                    IntPtr.Zero);
+                    ptr);
+                    //IntPtr.Zero);
 
-            ReturnValueManager.HandleFunctionReturnValue(result);
-
+            ReturnValueManager.HandleFunctionReturnValue(result);            
         }
 
         /// <summary>
@@ -907,8 +915,14 @@ namespace EDSDKWrapper.Framework.Objects
         /// <param name="inContext">Passes inContext without modification</param>
         /// <returns>Status 0 (OK)</returns>
         private uint objectEventHandler(uint inEvent, IntPtr inRef, IntPtr inContext)
-        {
+        {          
             Console.WriteLine(String.Format("ObjectEventHandler: event {0}, ref {1}", inEvent.ToString("X"), inRef.ToString()));
+
+            if (CustomObjectEventHandler != null)
+            {
+               return CustomObjectEventHandler.Invoke(inEvent, inRef, inContext);
+            }
+
             switch (inEvent)
             {
                 case (uint)ObjectEvent.DirItemRequestTransfer:
@@ -916,6 +930,7 @@ namespace EDSDKWrapper.Framework.Objects
                     DownloadImage(inRef);
                     break;              
             }
+
             return 0x0;
         }
 
